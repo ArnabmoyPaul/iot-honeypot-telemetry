@@ -1,0 +1,24 @@
+# IoT Device Signature Patterns for Logstash Grok
+# Used to identify attacker device fingerprinting attempts
+
+HIKVISION_BANNER: SSH-2\.0-dropbear_20%{INT}
+NETGEAR_BANNER: SSH-2\.0-OpenSSH_%{DATA}
+TP_LINK_BANNER: SSH-2\.0-dropbear_%{DATA}
+DVR_BANNER: SSH-2\.0-libssh_%{DATA}
+
+# Command patterns for MITRE ATT&CK mapping
+CMD_UNAME: uname %{DATA}
+CMD_CPUINFO: cat /proc/cpuinfo
+CMD_MEMINFO: cat /proc/meminfo
+CMD_WGET: wget %{URI}
+CMD_CURL: curl %{URI}
+CMD_TFTP: tftp %{IP} -c get %{DATA}
+CMD_CHMOD: chmod \+x %{DATA}
+CMD_EXEC: \./%{DATA}
+CMD_PERSISTENCE: echo %{DATA} >> /etc/%{DATA}
+CMD_CRONTAB: crontab %{DATA}
+CMD_INITD: /etc/init\.d/%{DATA}
+
+# Credential brute-force patterns
+BRUTE_SSH: ssh %{DATA}@%{IP}
+BRUTE_TELNET: telnet %{IP} %{INT}

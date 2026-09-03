@@ -1,0 +1,22 @@
+# Python dependencies for honeypot telemetry infrastructure
+# Used by deception score calculator and test suite
+
+# Core utilities
+pyyaml>=6.0
+requests>=2.31.0
+
+# GeoIP enrichment
+maxminddb>=2.2.0
+
+# System monitoring
+psutil>=5.9.0
+
+# Scheduling (for periodic deception score checks)
+schedule>=1.2.0
+
+# Testing framework
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Optional: iptables Python bindings (Linux only)
+# python-iptables>=1.0.0

@@ -1,0 +1,50 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Data & Logs
+data/cowrie-logs/*.json
+data/dionaea-logs/*.json
+data/dionaea-bistreams/*
+data/geoip/*.mmdb
+!data/cowrie-logs/.gitkeep
+!data/dionaea-logs/.gitkeep
+!data/dionaea-bistreams/.gitkeep
+!data/geoip/.gitkeep
+
+# Elasticsearch
+es-data/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/
+
+# Terraform / AWS
+*.tfstate
+*.tfstate.*
+.terraform/
+*.pem

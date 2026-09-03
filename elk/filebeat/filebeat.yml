@@ -1,0 +1,75 @@
+filebeat.inputs:
+  # Cowrie SSH/Telnet honeypot logs
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/cowrie/cowrie.json
+    fields:
+      type: cowrie
+      honeypot_name: cowrie-ssh
+      cloud_provider: aws
+      project: iot-telemetry
+    fields_under_root: false
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.message_key: message
+    multiline.pattern: '^\{'
+    multiline.negate: true
+    multiline.match: after
+
+  # Dionaea malware/payload honeypot logs
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/dionaea/dionaea.json
+    fields:
+      type: dionaea
+      honeypot_name: dionaea-malware
+      cloud_provider: aws
+      project: iot-telemetry
+    fields_under_root: false
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.message_key: message
+
+  # Deception score metrics
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/deception-score.json
+    fields:
+      type: deception-score
+      honeypot_name: deception-scorer
+      cloud_provider: aws
+      project: iot-telemetry
+    fields_under_root: false
+    json.keys_under_root: true
+
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_cloud_metadata: ~
+  - add_docker_metadata: ~
+
+# Output to Logstash for parsing/enrichment
+output.logstash:
+  hosts: ["logstash:5044"]
+  ssl.enabled: false
+  worker: 2
+  bulk_max_size: 2048
+
+# Logging
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+
+# Registry file for tracking read position
+filebeat.registry.path: /var/lib/filebeat/registry

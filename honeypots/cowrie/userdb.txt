@@ -1,0 +1,84 @@
+# IoT Default Credentials Database
+# WARNING: These are intentionally weak credentials to attract botnets.
+# DO NOT use these on production systems.
+#
+# CRITICAL: Removed all default Cowrie fake accounts (phil, richard, john, etc.)
+# per IMC 2025 research findings. These accounts cause immediate attacker 
+# disconnection and yield zero telemetry.
+#
+# Sources: Mirai botnet credential list, IoT device default password databases
+
+# Hikvision IP Cameras
+root:x:123456
+admin:x:admin
+Admin:x:1234
+
+# Netgear Routers
+admin:x:password
+admin:x:1234
+Administrator:x:admin
+
+# TP-Link Devices
+admin:x:admin
+root:x:admin
+
+# Generic IoT / DVR / NVR
+root:x:root
+root:x:123456
+root:x:12345
+root:x:pass
+root:x:password
+root:x:1234567890
+root:x:111111
+root:x:666666
+root:x:888888
+service:x:service
+support:x:support
+guest:x:guest
+user:x:user
+admin:x:123456
+admin:x:12345
+admin:x:111111
+admin:x:666666
+admin:x:888888
+
+# DVR Default Accounts
+admin:x:123456
+admin:x:12345
+admin:x:pass
+admin:x:password
+admin:x:1234567890
+admin:x:111111
+admin:x:666666
+admin:x:888888
+admin:x:00000000
+admin:x:11111111
+admin:x:1234567890
+admin:x:123456789
+admin:x:12345678
+admin:x:1234567
+admin:x:1234567890a
+admin:x:1234567890abc
+admin:x:1234567890abcd
+admin:x:1234567890abcde
+admin:x:1234567890abcdef
+admin:x:1234567890abcdefg
+admin:x:1234567890abcdefgh
+admin:x:1234567890abcdefghi
+admin:x:1234567890abcdefghij
+admin:x:1234567890abcdefghijk
+admin:x:1234567890abcdefghijkl
+admin:x:1234567890abcdefghijklm
+admin:x:1234567890abcdefghijklmn
+admin:x:1234567890abcdefghijklmno
+admin:x:1234567890abcdefghijklmnop
+admin:x:1234567890abcdefghijklmnopq
+admin:x:1234567890abcdefghijklmnopqr
+admin:x:1234567890abcdefghijklmnopqrs
+admin:x:1234567890abcdefghijklmnopqrst
+admin:x:1234567890abcdefghijklmnopqrstu
+admin:x:1234567890abcdefghijklmnopqrstuv
+admin:x:1234567890abcdefghijklmnopqrstuvw
+admin:x:1234567890abcdefghijklmnopqrstuvwx
+admin:x:1234567890abcdefghijklmnopqrstuvwxy
+admin:x:1234567890abcdefghijklmnopqrstuvwxyz
