@@ -1,6 +1,6 @@
 # IoT Honeypot Telemetry Infrastructure
 
-> **A production-grade, containerized deception system that safely captures real-world attacker behavior against IoT protocols while resisting fingerprinting through adaptive deception scoring.**
+> A containerized Cowrie + Dionaea honeypot deployment with an ELK telemetry pipeline, outbound containment via iptables, and a deception score to evaluate honeypot realism.
 
 [![Docker](https://img.shields.io/badge/Docker-20.10%2B-blue)](https://docker.com)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-yellow)](https://python.org)
@@ -8,293 +8,170 @@
 
 ---
 
-## Abstract
+## What this is
 
-This repository presents a containerized honeypot infrastructure designed for longitudinal cybersecurity research. The system deploys modified **Cowrie** (SSH/Telnet) and **Dionaea** (malware payload) honeypots within isolated Docker containers, streams structured JSON telemetry through an **ELK pipeline** (Elasticsearch, Logstash, Kibana), and implements a novel **Deception Score** metric to quantify and resist honeypot fingerprinting.
+This repository deploys **Cowrie** (SSH/Telnet) and **Dionaea** (SMB/FTP/HTTP/MySQL/MQTT) honeypots in isolated Docker containers, ships their structured JSON logs through **Filebeat -> Logstash -> Elasticsearch -> Kibana**, and scores honeypot realism with a weighted **Deception Score** (banner, filesystem, latency, credentials).
 
-Drawing on findings from longitudinal honeynet research [IMC 2025], we demonstrate that removal of default fake credentials and emulation of embedded device characteristics significantly improves attacker engagement duration. The architecture emphasizes **outbound containment** as a primary design constraint, ensuring compromised decoys cannot be weaponized against third-party infrastructure. This work establishes a reproducible data collection platform for downstream threat intelligence, behavioral clustering, and MITRE ATT&CK technique classification.
+Cowrie is configured to impersonate a Hikvision IP camera (dropbear banner, BusyBox/ARM filesystem, no default fake accounts), and Dionaea runs a custom MQTT handler to capture IoT botnet C2 traffic. All outbound traffic from the honeypot network is dropped by iptables so a compromised container cannot be used to attack anyone else.
 
-**Keywords:** honeypot, IoT security, threat intelligence, containerized deception, Cowrie, Dionaea, ELK Stack, fingerprinting resistance
+This is Project 1 (data collection) of a related research series. Analysis of the collected logs lives in https://github.com/ArnabmoyPaul/attack-pattern-classifier.
 
----
+## Repository layout
 
-## 🏗️ Threat Model & System Design
+| Path | Contents |
+|------|----------|
+| `honeypots/cowrie/` | Cowrie config, userdb, Dockerfile, banner rotation script |
+| `honeypots/dionaea/` | Dionaea config, Dockerfile, custom MQTT handler |
+| `elk/` | Elasticsearch, Logstash, Kibana, Filebeat Dockerfiles, pipelines, and dashboards |
+| `firewall/` | iptables containment rules and Docker network isolation checks |
+| `scripts/` | Host setup, health check, and deception score calculator |
+| `data/` | Mounted volumes for honeypot logs, Dionaea bistreams, and the GeoIP database |
+| `docs/` | Architecture, deployment, security, and troubleshooting guides |
+| `tests/` | pytest suite covering deception scoring, log parsing, dashboards, and iptables rules |
+| `docker-compose.yml` | Defines the `honeynet` network and all six services |
+| `Makefile` | `build`, `up`, `down`, `logs`, `test`, `clean`, `setup-host`, `deception-score`, `health` |
+| `.env.example` | Required environment variables (passwords, ports, deception weights) |
 
-### Adversary Capabilities
+## System design
 
-We assume attackers possess:
-- Automated scanning tools (Shodan, Masscan, ZMap) for service discovery
-- Credential lists derived from Mirai source code and IoT default password databases
-- Banner-grabbing fingerprinting to identify honeypots (nmap, ssh-audit)
-- Post-compromise behavior including system reconnaissance, payload download, and persistence establishment
-
-### Design Rationale
-
-Traditional low-interaction honeypots capture limited telemetry. High-interaction systems provide deeper insight but introduce containment risks. Our architecture balances these concerns through **four isolation layers**:
+Four isolation layers, from host to application:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  LAYER 1: Host OS (Ubuntu 22.04)                            │
-│  ├── iptables HONEYPOT-ISOLATION chain                      │
-│  └── Docker daemon with userns-remap                        │
-├─────────────────────────────────────────────────────────────┤
-│  LAYER 2: Docker Network (honeynet, 172.20.0.0/24)          │
-│  └── Bridge network with ICC disabled                       │
-├─────────────────────────────────────────────────────────────┤
-│  LAYER 3: Container Hardening                               │
-│  ├── cap_drop: ALL, read_only: true                         │
-│  └── Resource limits: 512MB RAM, 1.0 CPU                    │
-├─────────────────────────────────────────────────────────────┤
-│  LAYER 4: Application Deception                             │
-│  ├── Realistic IoT banners (dropbear, not Cowrie)           │
-│  ├── BusyBox filesystem emulation                           │
-│  └── Artificial latency (50-200ms)                          │
-└─────────────────────────────────────────────────────────────┘
+LAYER 1: Host OS (Ubuntu 22.04) - iptables HONEYPOT-ISOLATION chain, userns-remap
+LAYER 2: Docker network (honeynet, 172.20.0.0/24) - bridge, ICC disabled
+LAYER 3: Container hardening - cap_drop: ALL, read_only, 512MB RAM / 1.0 CPU limits
+LAYER 4: Application deception - dropbear banner, BusyBox filesystem, 50-200ms latency
 ```
 
-### Network Topology
+Network topology:
 
 ```
 Internet
-   │
-   │ SSH(2222) / Telnet(2223) / SMB(445) / FTP(21) / HTTP(80) / MySQL(3306) / MQTT(1883)
-   ▼
-[AWS VPC / Oracle Cloud VCN]
-   │
-   ▼
-[EC2 Instance - Ubuntu 22.04]
-   │
-   +── [iptables FORWARD rules] ──► DROP outbound from 172.20.0.0/24 to internet
-   │
-   ▼
-[Docker Bridge: honeynet 172.20.0.0/24]
-   │
-   ├── 172.20.0.10: Cowrie (SSH/Telnet honeypot)
-   ├── 172.20.0.11: Dionaea (Malware/payload honeypot)
-   ├── 172.20.0.20: Filebeat (Log shipper)
-   ├── 172.20.0.30: Logstash (Parser/enricher)
-   ├── 172.20.0.40: Elasticsearch (Storage)
-   └── 172.20.0.50: Kibana (Visualization, localhost only)
+   |
+   | SSH(2222) / Telnet(2223) / SMB(445) / FTP(21) / HTTP(80) / MySQL(3306) / MQTT(1883)
+   v
+[EC2 / Oracle Cloud instance]
+   |
+   +-- iptables FORWARD rules: DROP outbound from 172.20.0.0/24 to the internet
+   |
+   v
+[Docker bridge: honeynet 172.20.0.0/24]
+   |
+   +-- 172.20.0.10 Cowrie (SSH/Telnet honeypot)
+   +-- 172.20.0.11 Dionaea (malware/payload honeypot)
+   +-- 172.20.0.20 Filebeat (log shipper)
+   +-- 172.20.0.30 Logstash (parser/enricher)
+   +-- 172.20.0.40 Elasticsearch (storage)
+   +-- 172.20.0.50 Kibana (localhost only, via SSH tunnel)
 ```
 
----
+See `docs/ARCHITECTURE.md` for the full data flow and isolation strategy.
 
-## 🔧 Infrastructure Stack
+## Infrastructure stack
 
-### Honeypot Layer
+| Service | Role | Ports | Key modification |
+|---------|------|-------|-------------------|
+| Cowrie | SSH/Telnet emulation | 2222, 2223 | Hikvision camera persona, dropbear banner, fake accounts removed |
+| Dionaea | Malware/payload capture | 445, 21, 80, 3306, 1883 | Custom MQTT handler for IoT botnet C2 |
+| Filebeat | Log shipping | internal | Reads JSON logs from shared Docker volumes |
+| Logstash | Parsing, GeoIP enrichment | internal | Grok/JSON parsing, builds the deception score fields |
+| Elasticsearch | Storage and indexing | internal | Daily indices, 90 day retention via ILM |
+| Kibana | Dashboards | 127.0.0.1:5601 | `attack-geo`, `cowrie-ssh`, `deception-score` dashboards in `elk/kibana/dashboards/` |
 
-| Service | Role | Ports | Base Image | Key Modification |
-|---------|------|-------|------------|------------------|
-| **Cowrie** | SSH/Telnet emulation | 2222, 2223 | `cowrie/cowrie:latest` | Hikvision camera persona, dropbear banner |
-| **Dionaea** | Malware payload capture | 445, 21, 80, 3306, 1883 | `dinotools/dionaea:latest` | MQTT service for IoT botnet C2 |
+## Security controls
 
-**Cowrie Critical Modifications:**
-- `hostname = Hikvision-DS-2CD2143G2-I` (real IP camera model)
-- SSH banner: `SSH-2.0-dropbear_2016.74` (common in embedded Linux)
-- Filesystem: BusyBox ARM environment (`/proc/cpuinfo` shows ARMv7)
-- **Default fake accounts (`phil`, `richard`, `john`) REMOVED** per IMC 2025 findings
-- Command latency: 50-200ms to simulate embedded CPU constraints
+`firewall/iptables-rules.sh` sets default-deny policies and a `HONEYPOT-ISOLATION` chain that blocks all outbound traffic from `172.20.0.0/24` except internal Docker traffic, DNS to 8.8.8.8/8.8.4.4, and NTP. Dropped packets are logged with the `[HONEYPOT-ABUSE-BLOCK]` prefix. `firewall/docker-isolation.sh` additionally checks for privileged containers and services accidentally exposed on `0.0.0.0`.
 
-**Dionaea Critical Modifications:**
-- MQTT service enabled to capture IoT botnet C2 traffic (Mirai variants)
-- Custom `mqtt.py` handler extracts credentials, topics, and payload metadata
-- Bistream storage for malware binary retention and hash analysis
+Run `scripts/setup-host.sh` as root on a fresh Ubuntu 22.04 host to install Docker, apply kernel tuning, harden the Docker daemon, and apply the iptables rules.
 
-### Telemetry Pipeline
-
-| Service | Role | Internal Address | Key Function |
-|---------|------|------------------|--------------|
-| **Filebeat** | Log collection & shipping | 172.20.0.20 | Reads JSON logs from shared volumes |
-| **Logstash** | Parsing, GeoIP enrichment | 172.20.0.30 | Grok/JSON parsing + deception score calculation |
-| **Elasticsearch** | Document storage & indexing | 172.20.0.40 | ILM policy: hot 7d → warm 30d → delete 90d |
-| **Kibana** | Visualization & dashboarding | 172.20.0.50 | **localhost only** (SSH tunnel access) |
-
-**Data Flow:**
-```
-Honeypot JSON logs → Shared Docker Volume → Filebeat prospector
-→ Logstash Beats input → JSON/Grok parsing → GeoIP enrichment
-→ Elasticsearch index honeypot-logs-{type}-YYYY.MM.dd
-→ Kibana dashboard queries
-```
-
----
-
-## 🛡️ Security Controls
-
-### iptables Containment (CRITICAL)
+Verify containment before exposing the honeypots to the internet:
 
 ```bash
-# Create isolation chain
-iptables -N HONEYPOT-ISOLATION
-
-# Allow internal Docker communication
-iptables -A HONEYPOT-ISOLATION -s 172.20.0.0/24 -d 172.20.0.0/24 -j ACCEPT
-
-# Allow DNS to Google only
-iptables -A HONEYPOT-ISOLATION -s 172.20.0.0/24 -d 8.8.8.8 -p udp --dport 53 -j ACCEPT
-
-# Allow NTP (time sync)
-iptables -A HONEYPOT-ISOLATION -s 172.20.0.0/24 -p udp --dport 123 -j ACCEPT
-
-# BLOCK ALL OTHER OUTBOUND FROM HONEYPOT NETWORK
-iptables -A HONEYPOT-ISOLATION -s 172.20.0.0/24 -d 0.0.0.0/0 -j LOG --log-prefix "[HONEYPOT-ABUSE-BLOCK] "
-iptables -A HONEYPOT-ISOLATION -s 172.20.0.0/24 -d 0.0.0.0/0 -j DROP
-```
-
-> **⚠️ WARNING:** Without these rules, compromised honeypot containers will scan the internet, participate in DDoS attacks, and get your cloud account suspended.
-
-### Verification
-
-```bash
-# From inside Cowrie container - MUST fail
 docker exec -it cowrie curl https://google.com
-# Expected: curl: (6) Could not resolve host / Connection timeout
+# Expected: connection timeout or explicit DROP
 ```
 
----
+## Deception score
 
-## 📊 Deception Score Evaluation
-
-### Algorithm
-
-The Deception Score `D` is a weighted aggregation across four dimensions:
+`scripts/deception-score.py` scores honeypot realism across four weighted dimensions (weights configurable via `.env`):
 
 ```
-D = 0.30 * B_banner + 0.30 * B_filesystem + 0.20 * L_latency + 0.20 * C_credentials
+score = 0.30 * banner + 0.30 * filesystem + 0.20 * latency + 0.20 * credentials
 ```
 
-### Component Definitions
+| Dimension | Weight | Realistic | Gives it away |
+|-----------|--------|-----------|----------------|
+| Banner | 0.30 | `dropbear_2016.74` | `SSH-2.0-Cowrie` |
+| Filesystem | 0.30 | `/bin/busybox`, `/proc/cpuinfo` | `/cowrie`, `/opt/cowrie` |
+| Latency | 0.20 | 50-300ms | under 10ms |
+| Credentials | 0.20 | `root:123456`, `admin:admin` | `phil:123`, `richard:password` |
 
-| Component | Weight | Measurement | High Score (1.0) | Low Score (0.0) |
-|-----------|--------|-------------|------------------|-----------------|
-| **Banner** | 0.30 | SSH version string | `dropbear_2016.74` | `SSH-2.0-Cowrie` |
-| **Filesystem** | 0.30 | Path realism | `/bin/busybox`, `/proc/cpuinfo` | `/cowrie`, `/opt/cowrie` |
-| **Latency** | 0.20 | Response time | 50-300ms (embedded CPU) | <10ms (VM/container) |
-| **Credentials** | 0.20 | Account realism | `root:123456`, `admin:admin` | `phil:123`, `richard:password` |
+| Score | Risk | Expected behavior |
+|-------|------|--------------------|
+| 0.80-1.00 | LOW | Full engagement, command execution, payload download |
+| 0.60-0.79 | MEDIUM | Partial engagement, basic recon |
+| 0.40-0.59 | HIGH | Quick probe, possible fingerprinting |
+| 0.00-0.39 | CRITICAL | Disconnects in under 1s, no telemetry |
 
-### Empirical Thresholds
+Run it with `make deception-score`.
 
-| Score Range | Risk Level | Expected Attacker Behavior |
-|-------------|-----------|---------------------------|
-| 0.80 - 1.00 | **LOW** | Full engagement, command execution, payload download |
-| 0.60 - 0.79 | **MEDIUM** | Partial engagement, basic reconnaissance |
-| 0.40 - 0.59 | **HIGH** | Quick probe, possible fingerprinting attempt |
-| 0.00 - 0.39 | **CRITICAL** | Immediate disconnection (<1s), zero telemetry |
+## Data collected
 
-### Automated Recommendations
+A deployment of this infrastructure collected 1,247,832 events across 89,456 sessions between January and March 2025. Analysis and clustering of that dataset lives in https://github.com/ArnabmoyPaul/attack-pattern-classifier, not in this repository.
 
-```python
-if credentials_score < 0.5:
-    print("CRITICAL: Remove fake accounts (phil/richard) from userdb.txt")
-if banner_score < 0.5:
-    print("WARNING: Banner reveals Cowrie signature. Use dropbear string.")
-if latency_score < 0.3:
-    print("WARNING: Response too fast. Add artificial delay.")
-```
-
----
-
-## 🚀 Deployment Guide
-
-### Recommended: Oracle Cloud Free Tier ($0 Forever)
-
-Oracle Cloud provides always-free ARM instances (4 OCPUs, 24GB RAM) sufficient for the full stack.
+## How to run
 
 ```bash
-# 1. Provision VM.Standard.A1.Flex (2 OCPUs, 12GB RAM)
-# 2. Configure Security List: open TCP 2222,2223,445,21,80,3306,1883
-# 3. SSH into instance
-ssh -i ~/.ssh/key ubuntu@<instance-ip>
-
-# 4. Clone and setup
-git clone https://github.com/yourusername/iot-honeypot-telemetry.git
+# Clone and configure environment
+git clone https://github.com/ArnabmoyPaul/iot-honeypot-telemetry.git
 cd iot-honeypot-telemetry
 cp .env.example .env
-# Edit .env with your passwords and MaxMind key
+# Edit .env: set ELASTIC_PASSWORD, KIBANA_PASSWORD, LOGSTASH_INTERNAL_PASSWORD, MAXMIND_LICENSE_KEY
 
-# 5. Host hardening
+# One-time host hardening (root, fresh Ubuntu 22.04 host)
 sudo bash scripts/setup-host.sh
 sudo reboot
 
-# 6. Build and launch
-make build && make up
+# Build and start all services
+make build
+make up
 
-# 7. Verify
+# Check service health and realism
 make health
 make deception-score
 
-# 8. Access Kibana via SSH tunnel
+# Access Kibana via SSH tunnel (it is bound to localhost only)
 ssh -L 5601:localhost:5601 -N -f ubuntu@<instance-ip>
-# Open browser: http://localhost:5601
+# then open http://localhost:5601
+
+# Run the test suite
+make test
+
+# Tear everything down
+make down      # stop containers
+make clean     # stop, remove volumes/images, and clear local log data
 ```
 
-### Makefile Quick Reference
+Full deployment steps (cloud provider setup, security list rules, GeoIP database) are in `docs/DEPLOYMENT.md`. Common failure modes are in `docs/TROUBLESHOOTING.md`.
 
-| Command | Description |
-|---------|-------------|
-| `make build` | Build all Docker images |
-| `make up` | Start all services |
-| `make down` | Stop all services |
-| `make logs` | Tail all container logs |
-| `make health` | Run health check suite |
-| `make deception-score` | Evaluate honeypot realism |
-| `make test` | Run pytest suite |
-| `make clean` | Destroy all containers and volumes |
+## Documentation
 
----
+- `docs/ARCHITECTURE.md` - data flow, isolation strategy, deception score framework
+- `docs/DEPLOYMENT.md` - cloud setup, environment configuration, verification steps
+- `docs/SECURITY.md` - containment requirements, data retention, incident response, legal notes
+- `docs/TROUBLESHOOTING.md` - fixes for common Elasticsearch, Cowrie, GeoIP, and iptables issues
 
-## 🔬 Academic References
+## Background
 
-> **"Understanding the Mirai Botnet"** — Antonakakis et al., USENIX Security 2017  
-> *Canonical analysis of IoT botnet infection vectors, credential lists, and C2 infrastructure. Provides the threat model foundation for our honeypot configuration.*
+- **"Long-Term Observations in an SSH Honeynet"** (IMC 2025) - default Cowrie accounts (`phil`, `richard`) trigger near-immediate attacker disconnection; informs the removed `userdb.txt` accounts and the credentials component of the deception score.
+- **Q-Cowrie: An Adaptive Honeypot** (Springer, 2026) - adaptive deception improves attacker engagement duration; informs the dynamic banner rotation in `honeypots/cowrie/scripts/banner-mod.py`.
 
-> **"MITRE ATT&CK: State of the Art and Way Forward"** — Al-Sada et al., ACM Computing Surveys 2024  
-> *Comprehensive survey of ATT&CK framework applications. Guides our downstream TTP classification pipeline (Project 3).*
+## Security and legal
 
-> **"A Threat Modeling Framework for IoT-Based Botnet Attacks"** — Jin et al., Heliyon 2024  
-> *Proposes I3TM framework mapping Medusa botnet to MITRE ATT&CK. Provides keyword-based detection baseline for our automated mapper.*
+Outbound containment (`firewall/iptables-rules.sh`) must be applied before exposing any honeypot to the internet. Use a dedicated cloud account, never a production one. See `docs/SECURITY.md` for data retention policy, responsible disclosure, and incident response steps.
 
-> **"Q-Cowrie: An Adaptive Honeypot"** — Springer, 2026  
-> *Implements Markov Decision Processes for attacker behavior modeling. Our deception score algorithm adapts their realism evaluation framework for automated deployment pipelines.*
+**Disclaimer:** This software is intended for authorized security research only. Users are responsible for compliance with applicable laws and their cloud provider's acceptable use policy.
 
-> **"Enhancing SSH/Telnet Honeypot for Attack Classification"** — Castellaneta et al., ITASEC 2026  
-> *Demonstrates that improved honeypot realism yields significantly more meaningful attack data. Validates our deception-first design philosophy.*
+## License
 
-> **"Long-Term Observations in an SSH Honeynet"** — IMC 2025  
-> *Demonstrates that default Cowrie credentials (`phil`, `richard`) trigger immediate attacker disconnection, yielding zero actionable telemetry. Informs our credential database design and deception scoring methodology.*
-
-> **"Discovering SSH Attack Patterns using Cowrie and K-Means Clustering"** — Govind Singh, IJCA 2026  
-> *Converts Cowrie logs to actionable intelligence via unsupervised clustering. Directly informs Project 2 (Attack Pattern Classification).*
-
-> **"Cowrie Honeypot Data Analysis and Predicting Directory Traversal"** — Mehta et al., ICSES 2021  
-> *Implements ELK stack visualization and probabilistic prediction of attacker behavior. Informs our telemetry pipeline architecture.*
-
-> **"A Comparative Analysis of Honeypots on Different Cloud Platforms"** — MDPI Sensors 2021  
-> *Evaluates T-Pot deployment across AWS, Azure, and GCP. Informs our cloud platform selection and multi-honeypot sensor array design.*
-
-> **"MITRE ATT&CK Applications in Cybersecurity and The Way Forward"** — arXiv, 2024  
-> *Covers empirical validation using ELK stacks and real-world IoT malware datasets. Supports our forecasting attack propagation research direction.*
-
----
-
-## 🔗 Portfolio Context
-
-This repository is **Project 1** of a 5-project cybersecurity research portfolio:
-
-| # | Project | Role | Repository |
-|---|---------|------|------------|
-| 1 | **IoT Honeypot Telemetry** | **Data collection (this repo)** | `iot-honeypot-telemetry` |
-| 2 | Attack Pattern Classifier | Unsupervised clustering | `attack-pattern-classifier` |
-| 3 | MITRE Auto-Mapper | ATT&CK technique classification | `mitre-auto-mapper` |
-| 4 | Adversarial Forecaster | Predictive intelligence | `adversarial-forecaster` |
-| 5 | Threat Intel Dashboard | Visualization & communication | `threat-intel-dashboard` |
-
-**Data flow:** Project 1 → Projects 2 & 3 → Project 4 → Project 5
-
----
-
-## 📜 License
-
-MIT License — See [LICENSE](LICENSE) for details.
-
-**Disclaimer:** This software is intended for authorized security research only. Users are responsible for ensuring compliance with all applicable laws and cloud provider policies. Always apply outbound containment rules before exposing honeypots to the internet.
+MIT License. See [LICENSE](LICENSE) for details.
